@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	. "github.com/onsi/ginkgo/v2" // nolint:revive,staticcheck
@@ -197,7 +198,10 @@ func GetProjectDir() (string, error) {
 	if err != nil {
 		return wd, fmt.Errorf("failed to get current working directory: %w", err)
 	}
-	wd = strings.ReplaceAll(wd, "/test/e2e", "")
+	// Traverse up if we are inside the test/e2e directory
+	if strings.HasSuffix(wd, filepath.Join("test", "e2e")) {
+		wd = filepath.Dir(filepath.Dir(wd))
+	}
 	return wd, nil
 }
 

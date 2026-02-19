@@ -29,7 +29,7 @@ type NginxClusterSpec struct {
 	// Important: Run "make" to regenerate code after modifying this file
 
 	// Replicas is the size of the Nginx deployment.
-	Replicas int32 `json:"replicas,omitempty"`
+	Replicas *int32 `json:"replicas,omitempty"`
 }
 
 // NginxClusterStatus defines the observed state of NginxCluster.
