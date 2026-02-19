@@ -28,7 +28,7 @@ type NginxClusterSpec struct {
 	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
 	// Important: Run "make" to regenerate code after modifying this file
 
-	// Foo is an example field of NginxCluster. Edit nginxcluster_types.go to remove/update
+	// Replicas is the size of the Nginx deployment.
 	Replicas int32 `json:"replicas,omitempty"`
 }
 
