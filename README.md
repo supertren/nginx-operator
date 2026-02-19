@@ -1,135 +1,191 @@
 # nginx-operator
-// TODO(user): Add simple overview of use/purpose
 
-## Description
-// TODO(user): An in-depth paragraph about your project and overview of use
+Operador OpenShift desarrollado con operator-sdk y Go que gestiona un Deployment de nginx con N réplicas mediante un Custom Resource `NginxCluster`.
 
-## Getting Started
+## ¿Qué hace este operador?
 
-### Prerequisites
-- go version v1.24.0+
-- docker version 17.03+.
-- kubectl version v1.11.3+.
-- Access to a Kubernetes v1.11.3+ cluster.
+Cuando creas un objeto `NginxCluster` en OpenShift, el operador automáticamente:
 
-### To Deploy on the cluster
-**Build and push your image to the location specified by `IMG`:**
+1. Crea un `Deployment` de nginx con las réplicas especificadas
+2. Crea un `Service` apuntando a los pods nginx en el puerto 8080
+3. Actualiza el campo `status.availableReplicas` del CR con el estado real
+4. Si alguien borra el Deployment manualmente, el operador lo recrea automáticamente (owner references)
 
-```sh
-make docker-build docker-push IMG=<some-registry>/nginx-operator:tag
+## Prerrequisitos
+
+En tu máquina necesitas:
+
+- **Windows 11** con Hyper-V habilitado
+- **CRC (OpenShift Local)** instalado y configurado (mínimo 8 vCPUs, 16GB RAM, 60GB disco)
+- **WSL2** con Ubuntu y git instalados
+- **PowerShell** (sin privilegios de administrador)
+- **oc CLI** en el PATH de PowerShell (incluido con CRC)
+
+## Instalación paso a paso
+
+### PASO 1 — Arrancar CRC (PowerShell)
+
+```powershell
+crc start
+& crc oc-env | Invoke-Expression
+oc login -u kubeadmin https://api.crc.testing:6443
 ```
 
-**NOTE:** This image ought to be published in the personal registry you specified.
-And it is required to have access to pull the image from the working environment.
-Make sure you have the proper permission to the registry if the above commands don’t work.
+Verifica que el cluster está operativo:
 
-**Install the CRDs into the cluster:**
-
-```sh
-make install
+```powershell
+oc get nodes
+# NAME   STATUS   ROLES                         AGE   VERSION
+# crc    Ready    control-plane,master,worker   Xd    v1.34.x
 ```
 
-**Deploy the Manager to the cluster with the image specified by `IMG`:**
+### PASO 2 — Clonar el repositorio (WSL2)
 
-```sh
-make deploy IMG=<some-registry>/nginx-operator:tag
+```bash
+cd ~
+git clone https://github.com/supertren/nginx-operator.git
+cd nginx-operator
 ```
 
-> **NOTE**: If you encounter RBAC errors, you may need to grant yourself cluster-admin
-privileges or be logged in as admin.
+### PASO 3 — Crear el namespace y el BuildConfig (PowerShell)
 
-**Create instances of your solution**
-You can apply the samples (examples) from the config/sample:
-
-```sh
-kubectl apply -k config/samples/
+```powershell
+oc new-project nginx-operator
+oc new-build --name=nginx-operator --binary --strategy=docker -n nginx-operator
 ```
 
->**NOTE**: Ensure that the samples has default values to test it out.
+### PASO 4 — Build de la imagen del operador (PowerShell)
 
-### To Uninstall
-**Delete the instances (CRs) from the cluster:**
+Sustituye `TU_USUARIO` por tu usuario de WSL2:
 
-```sh
-kubectl delete -k config/samples/
+```powershell
+oc start-build nginx-operator --from-dir="\\wsl$\Ubuntu\home\TU_USUARIO\nginx-operator" --follow -n nginx-operator
 ```
 
-**Delete the APIs(CRDs) from the cluster:**
+Al finalizar verás:
 
-```sh
-make uninstall
+```
+Push successful
 ```
 
-**UnDeploy the controller from the cluster:**
+### PASO 5 — Instalar el CRD (PowerShell)
 
-```sh
-make undeploy
+Sustituye `TU_USUARIO` por tu usuario de WSL2:
+
+```powershell
+oc apply -f "\\wsl$\Ubuntu\home\TU_USUARIO\nginx-operator\config\crd\bases\apps.example.com_nginxclusters.yaml" -n nginx-operator
 ```
 
-## Project Distribution
+### PASO 6 — Configurar el RBAC (PowerShell)
 
-Following the options to release and provide this solution to the users.
-
-### By providing a bundle with all YAML files
-
-1. Build the installer for the image built and published in the registry:
-
-```sh
-make build-installer IMG=<some-registry>/nginx-operator:tag
+```powershell
+oc apply -f "\\wsl$\Ubuntu\home\TU_USUARIO\nginx-operator\config\rbac\" -n nginx-operator
+oc create serviceaccount controller-manager -n nginx-operator
+oc adm policy add-cluster-role-to-user manager-role -z controller-manager -n nginx-operator
 ```
 
-**NOTE:** The makefile target mentioned above generates an 'install.yaml'
-file in the dist directory. This file contains all the resources built
-with Kustomize, which are necessary to install this project without its
-dependencies.
+> Los errores `namespace "system"` y `kustomization.yaml` son esperados e irrelevantes. El RBAC se aplica correctamente.
 
-2. Using the installer
+### PASO 7 — Desplegar el operador (PowerShell)
 
-Users can just run 'kubectl apply -f <URL for YAML BUNDLE>' to install
-the project, i.e.:
-
-```sh
-kubectl apply -f https://raw.githubusercontent.com/<org>/nginx-operator/<tag or branch>/dist/install.yaml
+```powershell
+$yaml = "apiVersion: apps/v1`nkind: Deployment`nmetadata:`n  name: nginx-operator`n  namespace: nginx-operator`nspec:`n  replicas: 1`n  selector:`n    matchLabels:`n      app: nginx-operator`n  template:`n    metadata:`n      labels:`n        app: nginx-operator`n    spec:`n      serviceAccountName: controller-manager`n      containers:`n      - name: manager`n        image: image-registry.openshift-image-registry.svc:5000/nginx-operator/nginx-operator:latest`n        command:`n        - /manager"
+$yaml | Out-File -FilePath "C:\Users\$env:USERNAME\nginx-operator-deployment.yaml" -Encoding utf8
+oc apply -f "C:\Users\$env:USERNAME\nginx-operator-deployment.yaml"
 ```
 
-### By providing a Helm Chart
+Verifica que el pod del operador está Running:
 
-1. Build the chart using the optional helm plugin
-
-```sh
-operator-sdk edit --plugins=helm/v1-alpha
+```powershell
+oc get pods -n nginx-operator
+# NAME                              READY   STATUS    RESTARTS   AGE
+# nginx-operator-xxxxxxxxx-xxxxx   1/1     Running   0          30s
 ```
 
-2. See that a chart was generated under 'dist/chart', and users
-can obtain this solution from there.
+### PASO 8 — Crear el Custom Resource NginxCluster (PowerShell)
 
-**NOTE:** If you change the project, you need to update the Helm Chart
-using the same command above to sync the latest changes. Furthermore,
-if you create webhooks, you need to use the above command with
-the '--force' flag and manually ensure that any custom configuration
-previously added to 'dist/chart/values.yaml' or 'dist/chart/manager/manager.yaml'
-is manually re-applied afterwards.
+```powershell
+$yaml = "apiVersion: apps.example.com/v1alpha1`nkind: NginxCluster`nmetadata:`n  name: mi-nginx`n  namespace: nginx-operator`nspec:`n  replicas: 3"
+$yaml | Out-File -FilePath "C:\Users\$env:USERNAME\nginxcluster-test.yaml" -Encoding utf8
+oc apply -f "C:\Users\$env:USERNAME\nginxcluster-test.yaml"
+```
 
-## Contributing
-// TODO(user): Add detailed information on how you would like others to contribute to this project
+### PASO 9 — Verificar el resultado (PowerShell)
 
-**NOTE:** Run `make help` for more information on all potential `make` targets
+```powershell
+oc get pods -n nginx-operator
+```
 
-More information can be found via the [Kubebuilder Documentation](https://book.kubebuilder.io/introduction.html)
+Resultado esperado:
 
-## License
+```
+NAME                              READY   STATUS    RESTARTS   AGE
+mi-nginx-xxxxxxxxx-xxxxx         1/1     Running   0          30s
+mi-nginx-xxxxxxxxx-xxxxx         1/1     Running   0          30s
+mi-nginx-xxxxxxxxx-xxxxx         1/1     Running   0          30s
+nginx-operator-xxxxxxxxx-xxxxx   1/1     Running   0          2m
+```
 
-Copyright 2026.
+Verifica el estado del CR:
 
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
+```powershell
+oc get nginxcluster mi-nginx -n nginx-operator -o yaml
+# status:
+#   availableReplicas: 3
+```
 
-    http://www.apache.org/licenses/LICENSE-2.0
+Verifica los logs del operador:
 
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
+```powershell
+oc logs deployment/nginx-operator -n nginx-operator --tail=10
+```
 
+## Probar owner references
+
+Si borras el Deployment de nginx manualmente, el operador lo recrea automáticamente:
+
+```powershell
+oc delete deployment mi-nginx -n nginx-operator
+# Espera 5 segundos
+oc get pods -n nginx-operator
+# Los 3 pods de nginx vuelven a aparecer
+```
+
+## Cambiar el número de réplicas
+
+```powershell
+$yaml = "apiVersion: apps.example.com/v1alpha1`nkind: NginxCluster`nmetadata:`n  name: mi-nginx`n  namespace: nginx-operator`nspec:`n  replicas: 5"
+$yaml | Out-File -FilePath "C:\Users\$env:USERNAME\nginxcluster-test.yaml" -Encoding utf8
+oc apply -f "C:\Users\$env:USERNAME\nginxcluster-test.yaml"
+oc get pods -n nginx-operator
+```
+
+El operador detecta el cambio y escala el Deployment automáticamente.
+
+## Limpiar el entorno
+
+```powershell
+oc delete project nginx-operator
+```
+
+## Estructura del proyecto
+
+```
+nginx-operator/
+├── api/v1alpha1/
+│   └── nginxcluster_types.go      # Definición del CRD (Spec + Status)
+├── internal/controller/
+│   └── nginxcluster_controller.go # Lógica del reconciliation loop
+├── config/
+│   ├── crd/bases/                 # YAML del CRD generado
+│   └── rbac/                      # ServiceAccount, ClusterRole, Bindings
+├── cmd/main.go                    # Punto de entrada del operador
+└── Dockerfile                     # Multi-stage build (golang:1.24 + distroless)
+```
+
+## Notas técnicas
+
+- **Imagen nginx**: se usa `nginxinc/nginx-unprivileged:latest` en lugar de `nginx:latest` porque OpenShift aplica SCC `restricted-v2` que prohíbe contenedores como root
+- **Puerto**: 8080 (nginx-unprivileged no puede bindear puertos menores de 1024)
+- **Build**: ocurre dentro del clúster CRC usando `BuildConfig` con input binario, sin necesidad de registry externo
+- **WSL2 ↔ PowerShell**: el código reside en WSL2 y se envía al clúster mediante la ruta UNC `\\wsl$\Ubuntu\...`
