@@ -123,7 +123,7 @@ func (r *NginxClusterReconciler) buildDeployment(nginx *appsv1alpha1.NginxCluste
 			},
 		},
 	}
-	ctrl.SetControllerReference(nginx, dep, r.Scheme)
+	_ = ctrl.SetControllerReference(nginx, dep, r.Scheme)
 	return dep
 }
 
@@ -142,7 +142,7 @@ func (r *NginxClusterReconciler) buildService(nginx *appsv1alpha1.NginxCluster) 
 			}},
 		},
 	}
-	ctrl.SetControllerReference(nginx, svc, r.Scheme)
+	_ = ctrl.SetControllerReference(nginx, svc, r.Scheme)
 	return svc
 }
 
