@@ -21,10 +21,15 @@ type NginxClusterReconciler struct {
 	Scheme *runtime.Scheme
 }
 
+//nolint:revive
 //+kubebuilder:rbac:groups=apps.example.com,resources=nginxclusters,verbs=get;list;watch;create;update;patch;delete
+//nolint:revive
 //+kubebuilder:rbac:groups=apps.example.com,resources=nginxclusters/status,verbs=get;update;patch
+//nolint:revive
 //+kubebuilder:rbac:groups=apps.example.com,resources=nginxclusters/finalizers,verbs=update
+//nolint:revive
 //+kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
+//nolint:revive
 //+kubebuilder:rbac:groups=core,resources=services,verbs=get;list;watch;create;update;patch;delete
 
 func (r *NginxClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
