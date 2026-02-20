@@ -1,0 +1,296 @@
+================================================================================
+RESUMEN STEP BY STEP - CREACIÓN DEL OPERADOR nginx-operator
+OpenShift CRC 4.21 · operator-sdk v1.42.0 · Go 1.24 · controller-runtime v0.21.0
+================================================================================
+
+ENTORNO
+-------
+- MiniPC MINISFORUM HX99G: Ryzen 9 6900HX, 64GB DDR5, 1TB SSD, Windows 11 Pro
+- CRC 4.21.0: 8 vCPUs, 24GB RAM, 100GB disco
+- API: https://api.crc.testing:6443 (solo accesible desde Windows)
+- Registry interno: image-registry.openshift-image-registry.svc:5000
+- Credenciales: kubeadmin / HLuKg-K8fZK-dG3pL-9IUJX
+- Dos vías de trabajo:
+    · PowerShell nativa: todos los comandos oc y crc
+    · WSL2 Ubuntu: operator-sdk, Go, make, git
+
+================================================================================
+FASE 1 - SCAFFOLDING DEL PROYECTO (WSL2)
+================================================================================
+
+PASO 1 - Crear el proyecto con operator-sdk
+-------------------------------------------
+  mkdir ~/nginx-operator && cd ~/nginx-operator
+  operator-sdk init --domain=example.com --repo=github.com/example/nginx-operator
+  operator-sdk create api --group=apps --version=v1alpha1 --kind=NginxCluster --resource --controller
+
+  Ficheros generados:
+    - api/v1alpha1/nginxcluster_types.go
+    - internal/controller/nginxcluster_controller.go
+    - config/crd/bases/
+    - config/rbac/
+    - Dockerfile, go.mod, Makefile
+
+PASO 2 - Definir el CRD (WSL2)
+-------------------------------
+  Fichero: api/v1alpha1/nginxcluster_types.go
+
+  NginxClusterSpec {
+      Replicas int32 `json:"replicas,omitempty"`
+  }
+  NginxClusterStatus {
+      AvailableReplicas int32 `json:"availableReplicas,omitempty"`
+  }
+
+  Comandos:
+    sed -i 's/Foo string .../Replicas int32 ...' api/v1alpha1/nginxcluster_types.go
+    sed -i 's/INSERT ADDITIONAL STATUS.../AvailableReplicas int32 ...' api/v1alpha1/nginxcluster_types.go
+    make generate && make manifests
+
+================================================================================
+FASE 2 - IMPLEMENTACIÓN DEL CONTROLLER (WSL2)
+================================================================================
+
+PASO 3 - Añadir markers RBAC
+-----------------------------
+  Fichero: internal/controller/nginxcluster_controller.go
+
+  //+kubebuilder:rbac:groups=apps.example.com,resources=nginxclusters,verbs=get;list;watch;create;update;patch;delete
+  //+kubebuilder:rbac:groups=apps.example.com,resources=nginxclusters/status,verbs=get;update;patch
+  //+kubebuilder:rbac:groups=apps.example.com,resources=nginxclusters/finalizers,verbs=update  <- IMPORTANTE: evita el error blockOwnerDeletion
+  //+kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
+  //+kubebuilder:rbac:groups=core,resources=services,verbs=get;list;watch;create;update;patch;delete
+
+PASO 4 - Implementar el Reconcile loop
+---------------------------------------
+  Lógica del Reconcile():
+    1. r.Get() del objeto NginxCluster
+    2. reconcileDeployment() -> crea Deployment si no existe, actualiza replicas si difieren
+    3. reconcileService()    -> crea Service :8080 si no existe
+    4. r.Get() del Deployment para obtener availableReplicas
+    5. r.Status().Update()   -> actualiza status.availableReplicas del CR
+
+  Funciones auxiliares:
+    - buildDeployment(): construye Deployment con owner reference
+      · Imagen: docker.io/nginxinc/nginx-unprivileged:latest  <- NO usar nginx:latest (OpenShift SCC restricted-v2 prohíbe root)
+      · Puerto: 8080
+      · ctrl.SetControllerReference() vincula Deployment al CR
+    - buildService(): construye Service con owner reference
+      · Puerto: 8080
+      · ctrl.SetControllerReference() vincula Service al CR
+    - SetupWithManager(): registra el controller para observar NginxCluster, Deployment y Service
+
+PASO 5 - Compilar y generar manifiestos (WSL2)
+-----------------------------------------------
+  make manifests
+  go build ./...
+
+================================================================================
+FASE 3 - DOCKERFILE MULTI-STAGE (WSL2)
+================================================================================
+
+PASO 6 - Crear el Dockerfile
+-----------------------------
+  FROM golang:1.24 AS builder
+  WORKDIR /workspace
+  COPY go.mod go.sum ./
+  RUN go mod download
+  COPY . .
+  RUN CGO_ENABLED=0 GOOS=linux go build -o manager cmd/main.go
+
+  FROM gcr.io/distroless/static:nonroot
+  WORKDIR /
+  COPY --from=builder /workspace/manager .
+  USER 65532:65532
+  ENTRYPOINT ["/manager"]
+
+================================================================================
+FASE 4 - BUILD DE LA IMAGEN (PowerShell)
+================================================================================
+
+PASO 7 - Crear namespace y BuildConfig (PowerShell)
+----------------------------------------------------
+  oc new-project nginx-operator
+  oc new-build --name=nginx-operator --binary --strategy=docker -n nginx-operator
+
+PASO 8 - Lanzar el build (PowerShell)
+--------------------------------------
+  oc start-build nginx-operator --from-dir="\\wsl$\Ubuntu\home\mik\nginx-operator" --follow -n nginx-operator
+
+  Resultado: Push successful
+  Imagen: image-registry.openshift-image-registry.svc:5000/nginx-operator/nginx-operator:latest
+
+  NOTA: el mecanismo --from-dir sube el código fuente de WSL2 al BuildConfig de OpenShift
+  que lo compila dentro del clúster. No se necesita registry externo.
+
+================================================================================
+FASE 5 - DESPLIEGUE DEL OPERADOR (PowerShell)
+================================================================================
+
+PASO 9 - Instalar el CRD
+--------------------------
+  oc apply -f "\\wsl$\Ubuntu\home\mik\nginx-operator\config\crd\bases\apps.example.com_nginxclusters.yaml" -n nginx-operator
+
+PASO 10 - Configurar el RBAC
+------------------------------
+  oc apply -f "\\wsl$\Ubuntu\home\mik\nginx-operator\config\rbac\" -n nginx-operator
+  oc create serviceaccount controller-manager -n nginx-operator
+  oc adm policy add-cluster-role-to-user manager-role -z controller-manager -n nginx-operator
+
+  NOTA: los errores "namespace system" y "kustomization.yaml" son esperados e irrelevantes.
+
+PASO 11 - Crear el Deployment del operador
+--------------------------------------------
+  $yaml = "apiVersion: apps/v1`nkind: Deployment`nmetadata:`n  name: nginx-operator ..."
+  $yaml | Out-File -FilePath "C:\Users\mik\nginx-operator-deployment.yaml" -Encoding utf8
+  oc apply -f "C:\Users\mik\nginx-operator-deployment.yaml"
+
+================================================================================
+FASE 6 - PRUEBA END-TO-END (PowerShell)
+================================================================================
+
+PASO 12 - Crear el Custom Resource NginxCluster
+-------------------------------------------------
+  $yaml = "apiVersion: apps.example.com/v1alpha1`nkind: NginxCluster`nmetadata:`n  name: mi-nginx`n  namespace: nginx-operator`nspec:`n  replicas: 3"
+  $yaml | Out-File -FilePath "C:\Users\mik\nginxcluster-test.yaml" -Encoding utf8
+  oc apply -f "C:\Users\mik\nginxcluster-test.yaml"
+
+PASO 13 - Verificar pods
+--------------------------
+  oc get pods -n nginx-operator
+
+  Resultado esperado:
+    mi-nginx-xxxxxxxxx-xxxxx   1/1   Running   <- nginx pod 1
+    mi-nginx-xxxxxxxxx-xxxxx   1/1   Running   <- nginx pod 2
+    mi-nginx-xxxxxxxxx-xxxxx   1/1   Running   <- nginx pod 3
+    nginx-operator-xxxxxxxxx   1/1   Running   <- controller
+
+PASO 14 - Verificar estado del CR
+-----------------------------------
+  oc get nginxcluster mi-nginx -n nginx-operator -o yaml
+
+  Resultado esperado:
+    status:
+      availableReplicas: 3
+
+PASO 15 - Verificar logs del operador
+---------------------------------------
+  oc logs deployment/nginx-operator -n nginx-operator --tail=10
+
+  Resultado esperado: INFO Reconciling NginxCluster ... replicas: 3 (sin errores)
+
+================================================================================
+TROUBLESHOOTING - PROBLEMAS ENCONTRADOS Y SOLUCIONES
+================================================================================
+
+PROBLEMA 1: blockOwnerDeletion forbidden
+------------------------------------------
+  Error:
+    deployments.apps "mi-nginx" is forbidden: cannot set blockOwnerDeletion
+    if an ownerReference refers to a resource you can't set finalizers on
+
+  Causa:
+    Faltaba el permiso de finalizers en el RBAC del controller.
+    ctrl.SetControllerReference() activa blockOwnerDeletion=true en el ownerReference,
+    pero el ServiceAccount no tenía permiso para actualizar finalizers en NginxCluster.
+
+  Solución:
+    Añadir marker RBAC en internal/controller/nginxcluster_controller.go:
+      //+kubebuilder:rbac:groups=apps.example.com,resources=nginxclusters/finalizers,verbs=update
+    Luego: make manifests -> oc apply rbac/ -> rebuild imagen -> oc rollout restart
+
+PROBLEMA 2: CrashLoopBackOff en pods nginx
+--------------------------------------------
+  Error en logs del pod:
+    mkdir() "/var/cache/nginx/client_temp" failed (13: Permission denied)
+
+  Causa:
+    OpenShift aplica SCC restricted-v2 por defecto que prohíbe correr contenedores como root.
+    La imagen nginx:latest intenta crear directorios en /var/cache/nginx/ como root.
+    La anotación del pod confirmaba: openshift.io/scc: restricted-v2
+
+  Solución:
+    Cambiar imagen en buildDeployment():
+      nginx:latest -> docker.io/nginxinc/nginx-unprivileged:latest
+    Cambiar puerto:
+      80 -> 8080
+    Rebuild imagen -> oc rollout restart -> oc delete deployment mi-nginx
+
+================================================================================
+FASE 7 - SUBIDA A GITHUB (WSL2 + Git Bash)
+================================================================================
+
+PASO 16 - Crear repositorio en GitHub (Git Bash)
+-------------------------------------------------
+  gh auth login  (o winpty gh auth login desde Git Bash)
+  gh repo create nginx-operator --public --description "OpenShift operator for nginx cluster management"
+
+PASO 17 - Configurar identidad git (WSL2)
+------------------------------------------
+  git config --global user.email "supertren@gmail.com"
+  git config --global user.name "supertren"
+
+PASO 18 - Copiar clave SSH de Windows a WSL2
+---------------------------------------------
+  cp /mnt/c/Users/mik/.ssh/id_ed25519 ~/.ssh/
+  cp /mnt/c/Users/mik/.ssh/id_ed25519.pub ~/.ssh/
+  chmod 600 ~/.ssh/id_ed25519
+  ssh -T git@github.com  -> Hi supertren! You've successfully authenticated
+
+PASO 19 - Commit y push (WSL2)
+--------------------------------
+  cd ~/nginx-operator
+  git init
+  git add .
+  git commit -m "feat: nginx-operator initial commit"
+  git branch -M main
+  git remote add origin git@github.com:supertren/nginx-operator.git
+  git push -u origin main
+
+  NOTA: si SSH falla por Cloudflare WARP, usar HTTPS:
+    git clone https://github.com/supertren/nginx-operator.git
+
+================================================================================
+NOTAS TÉCNICAS IMPORTANTES
+================================================================================
+
+1. WSL2 no puede acceder a api.crc.testing:6443 (red aislada de Hyper-V)
+   -> Todos los comandos oc SIEMPRE desde PowerShell
+
+2. PowerShell: comillas simples generan curly quotes
+   -> Siempre usar Out-File con $yaml para crear YAMLs
+   -> Verificar siempre con: type C:\Users\mik\fichero.yaml
+
+3. operator-sdk v1.42.0 requiere Go >= 1.23
+   -> Instalado manualmente en /usr/local/go (NO via apt)
+
+4. El directorio bin/ de WSL2 no es accesible desde PowerShell via \\wsl$
+   -> El ERROR "Ignoring file bin/controller-gen" en oc start-build es inofensivo
+
+5. owner references: ctrl.SetControllerReference() requiere permiso de finalizers
+   -> Sin ese permiso: error blockOwnerDeletion forbidden en cada reconcile
+
+6. nginx en OpenShift: SIEMPRE usar nginx-unprivileged (puerto 8080)
+   -> nginx:latest falla con Permission denied en /var/cache/nginx (SCC restricted-v2)
+
+7. Puente WSL2 <-> PowerShell para builds:
+   -> Código en WSL2: /home/mik/nginx-operator
+   -> Ruta UNC desde PowerShell: \\wsl$\Ubuntu\home\mik\nginx-operator
+
+================================================================================
+RESULTADO FINAL
+================================================================================
+
+Pods en ejecución (oc get pods -n nginx-operator):
+  nginx-operator-58cd5c5c58-h6hc7   1/1   Running   <- controller del operador
+  mi-nginx-8567f74cb4-n44mn         1/1   Running   <- nginx-unprivileged:8080
+  mi-nginx-8567f74cb4-ntqrq         1/1   Running   <- nginx-unprivileged:8080
+  mi-nginx-8567f74cb4-xk6pq         1/1   Running   <- nginx-unprivileged:8080
+
+Estado del CR (oc get nginxcluster mi-nginx -o yaml):
+  status:
+    availableReplicas: 3
+
+Repositorio GitHub: https://github.com/supertren/nginx-operator
+
+================================================================================
