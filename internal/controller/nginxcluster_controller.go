@@ -76,9 +76,9 @@ func (r *NginxClusterReconciler) reconcileDeployment(ctx context.Context, nginx 
 	}
 
 	// Actualizar replicas si no coinciden
-	if *deployment.Spec.Replicas != nginx.Spec.Replicas {
-		deployment.Spec.Replicas = &nginx.Spec.Replicas
-		logger.Info("Updating Deployment replicas", "replicas", nginx.Spec.Replicas)
+	if nginx.Spec.Replicas != nil && (deployment.Spec.Replicas == nil || *deployment.Spec.Replicas != *nginx.Spec.Replicas) {
+		deployment.Spec.Replicas = nginx.Spec.Replicas
+		logger.Info("Updating Deployment replicas", "replicas", *nginx.Spec.Replicas)
 		return r.Update(ctx, deployment)
 	}
 
@@ -109,7 +109,7 @@ func (r *NginxClusterReconciler) buildDeployment(nginx *appsv1alpha1.NginxCluste
 			Namespace: nginx.Namespace,
 		},
 		Spec: appsv1.DeploymentSpec{
-			Replicas: &replicas,
+			Replicas: replicas,
 			Selector: &metav1.LabelSelector{MatchLabels: labels},
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{Labels: labels},
