@@ -2,6 +2,8 @@
 
 Operador OpenShift desarrollado con operator-sdk y Go que gestiona un Deployment de nginx con N réplicas mediante un Custom Resource `NginxCluster`.
 
+![nginx-operator](./nginx-operator.png)
+
 ## ¿Qué hace este operador?
 
 Cuando creas un objeto `NginxCluster` en OpenShift, el operador automáticamente:
