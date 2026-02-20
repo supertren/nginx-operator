@@ -191,3 +191,24 @@ nginx-operator/
 - **Puerto**: 8080 (nginx-unprivileged no puede bindear puertos menores de 1024)
 - **Build**: ocurre dentro del clúster CRC usando `BuildConfig` con input binario, sin necesidad de registry externo
 - **WSL2 ↔ PowerShell**: el código reside en WSL2 y se envía al clúster mediante la ruta UNC `\\wsl$\Ubuntu\...`
+
+## Calidad de Código
+
+Este proyecto utiliza **golangci-lint** para garantizar la calidad del código mediante análisis estático automático.
+
+### GitHub Actions CI/CD
+
+Un workflow automático (`.github/workflows/lint.yml`) ejecuta los siguientes checks en cada push y pull_request:
+
+- ✅ **Setup Go**: Configura el entorno Go basado en `go.mod`
+- ✅ **Clone code**: Descarga el repositorio
+- ✅ **Run linter**: Ejecuta golangci-lint v2.1.0 para validar estándares de código
+
+**¿Qué verifica?**
+- Errores potenciales: variables no usadas, errores sin manejar
+- Problemas de estilo: espaciado en comentarios, nomenclatura inconsistente
+- Seguridad y rendimiento: código ineficiente, vulnerabilidades
+
+### Historial de cambios
+
+Consulta [CHANGELOG.md](./CHANGELOG.md) para ver el historial completo de cambios, fixes y mejoras.
